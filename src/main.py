@@ -1,8 +1,9 @@
 from NHK2024_Raspi_Library import MainController, TwoStateButton, TwoStateButtonHandler, ThreeStateButton, ThreeStateButtonHandler
 import json
 import sys
-from typing import Dict
+from typing import Dict, Callable
 from enum import Enum
+import can
 
 class CANList(Enum):
     ARM_EXPANDER = 0x103
@@ -30,9 +31,41 @@ class ClientController:
         except KeyError as e:
             raise KeyError("Invalid key is included in the data: {e}")
 
+class R1CANLister(can.Listener):
+    def __init__(self):
+        super().__init__()
+        self.write = None
+        self.write_with_can_id = None
+    
+    def init_write_fnc(self, write: Callable[[str], None], write_with_can_id: Callable[[str, int], None]):
+        self.write = write
+        self.write_with_can_id = write_with_can_id
+    
+    def on_message_received(self, msg):
+        can_id: int = msg.arbitration_id
+        data: bytearray = msg.data
+        
+        # if statement for each can_id
+        
+        # write log file
+        if self.write is None or self.write_with_can_id is None:
+            print("write function is not initialized")
+            return
+        
+        self.write(f"Received CAN Message can_id: {can_id}, data: {data}")
+        self.write_with_can_id(f"Received CAN Message data: {data}", can_id)
+        print(f"Received CAN Message can_id: {can_id}, data: {data}")
+
 class R1MainController(MainController):
     def __init__(self, host_name, port):
         super().__init__(host_name=host_name, port=port)
+        
+        # init can lister
+        lister = R1CANLister()
+        lister.init_write_fnc(self.log_system.write, self.write_can_bus)
+        self.init_can_notifier(lister=lister)
+        
+        # init button state
         self.btn_a_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
         self.btn_b_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
         self.btn_x_state = ThreeStateButtonHandler(state=ThreeStateButton.WAIT_0)
