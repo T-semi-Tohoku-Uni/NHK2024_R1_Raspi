@@ -1,13 +1,16 @@
 from NHK2024_Raspi_Library import MainController, TwoStateButton, TwoStateButtonHandler, ThreeStateButton, ThreeStateButtonHandler
 import json
 import sys
-from typing import Dict
+from typing import Dict, Callable
 from enum import Enum
+import can
+import time
 
 class CANList(Enum):
     ARM_EXPANDER = 0x103
     HAND1 = 0x105
     HAND2 = 0X106
+    ARM_STATE = 0x107
     ARM_ELEVATOR = 0x104
     ARM1 = 0x108
     SHOOT = 0x101
@@ -30,9 +33,46 @@ class ClientController:
         except KeyError as e:
             raise KeyError("Invalid key is included in the data: {e}")
 
+class R1CANLister(can.Listener):
+    def __init__(self):
+        super().__init__()
+        self.write = None
+        self.write_with_can_id = None
+    
+    def init_write_fnc(self, write: Callable[[str], None], write_with_can_id: Callable[[str, int], None]):
+        self.write = write
+        self.write_with_can_id = write_with_can_id
+        
+    def init_write_can_bus_func(self, write_can_bus: Callable[[int, bytearray], None]):
+        self.write_can_bus = write_can_bus
+        
+    def on_message_received(self, msg):
+        can_id: int = int(msg.arbitration_id)
+        data: bytearray = msg.data
+
+        if can_id == CANList.ARM_STATE.value and data == bytearray([1]): # ARM is up state
+            self.write_can_bus(CANList.BALL_HAND.value, bytearray([1]))
+        
+        # write log file
+        if self.write is None or self.write_with_can_id is None:
+            print("write function is not initialized")
+            return
+        
+        self.write(f"Received CAN Message can_id: {str(can_id)}, data: {data}")
+        self.write_with_can_id(f"Received CAN Message data: {data}", can_id)
+        print(f"Received CAN Message can_id: {can_id}, data: {data}")
+
 class R1MainController(MainController):
     def __init__(self, host_name, port):
         super().__init__(host_name=host_name, port=port)
+        
+        # init can lister
+        lister = R1CANLister()
+        lister.init_write_fnc(self.log_system.write, self.log_system.write_with_can_id)
+        lister.init_write_can_bus_func(self.write_can_bus)
+        self.init_can_notifier(lister=lister)
+        
+        # init button state
         self.btn_a_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
         self.btn_b_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
         self.btn_x_state = ThreeStateButtonHandler(state=ThreeStateButton.WAIT_0)
@@ -94,7 +134,7 @@ class R1MainController(MainController):
         self.btn_lb_state.handle_button(
             is_pressed=data.btn_lb,
             action_send_0=lambda: self.write_can_bus(CANList.BALL_HAND.value, bytearray([0])),
-            action_send_1=lambda: self.write_can_bus(CANList.BALL_HAND.value, bytearray([1]))
+            action_send_1=lambda: self.write_can_bus(CANList.ARM_STATE.value, bytearray([]))
         )
         
         # 発射
@@ -107,8 +147,17 @@ class R1MainController(MainController):
         # 速度制御
         self.write_can_bus(CANList.ROBOT_VEL.value, bytearray([data.v_x, data.v_y, data.omega]))
         
+    def test(self):
+        while True:
+            # self.write_can_bus(CANList.ARM_STATE.value, bytearray([0]))
+            # self.write_can_bus(0x001, bytearray([1]))
+            time.sleep(1)
+        # for i in range(100):
+        #     self.write_can_bus(i, bytearray([i]))
+    
 if __name__ == "__main__":
     host_name = "raspberrypi.local"
     port = 12345
     r2_main_controller = R1MainController(host_name=host_name, port=port)
-    r2_main_controller.main()
+    # r2_main_controller.main()
+    r2_main_controller.test()
