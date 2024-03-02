@@ -1,13 +1,10 @@
 from NHK2024_Raspi_Library import MainController, TwoStateButton, TwoStateButtonHandler, ThreeStateButton, ThreeStateButtonHandler
 import json
 import sys
-from typing import Dict
+from typing import Dict, Callable
 from enum import Enum
-<<<<<<< Updated upstream
-=======
 import can
 import time
->>>>>>> Stashed changes
 
 class CANList(Enum):
     ARM_EXPANDER = 0x103
@@ -36,11 +33,6 @@ class ClientController:
         except KeyError as e:
             raise KeyError("Invalid key is included in the data: {e}")
 
-<<<<<<< Updated upstream
-class R1MainController(MainController):
-    def __init__(self, host_name, port):
-        super().__init__(host_name=host_name, port=port)
-=======
 class R1CANLister(can.Listener):
     def __init__(self):
         super().__init__()
@@ -81,7 +73,6 @@ class R1MainController(MainController):
         self.init_can_notifier(lister=lister)
         
         # init button state
->>>>>>> Stashed changes
         self.btn_a_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
         self.btn_b_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
         self.btn_x_state = ThreeStateButtonHandler(state=ThreeStateButton.WAIT_0)
