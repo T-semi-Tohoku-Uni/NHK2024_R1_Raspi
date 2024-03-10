@@ -39,28 +39,35 @@ class R1CANLister(can.Listener):
         self.write = None
         self.write_with_can_id = None
     
-    def init_write_fnc(self, write: Callable[[str], None], write_with_can_id: Callable[[str, int], None]):
+    def init_write_fnc(self, write: Callable[[str], None], update_received_can_log: Callable[[can.Message], None], update_send_can_log: Callable[[can.Message], None], update_error_log: Callable[[str], None]):
         self.write = write
-        self.write_with_can_id = write_with_can_id
+        self.update_received_can_log = update_received_can_log
+        self.update_send_can_log = update_send_can_log
+        self.update_error_log = update_error_log
         
     def init_write_can_bus_func(self, write_can_bus: Callable[[int, bytearray], None]):
         self.write_can_bus = write_can_bus
         
     def on_message_received(self, msg):
         can_id: int = int(msg.arbitration_id)
-        data: bytearray = msg.data
+        data: str = msg.data.hex()
+        is_error: bool = msg.is_error_frame
 
         if can_id == CANList.ARM_STATE.value and data == bytearray([1]): # ARM is up state
             self.write_can_bus(CANList.BALL_HAND.value, bytearray([1]))
         
+        if is_error is True:
+            self.update_error_log(msg.__str__())
+            print(f"Get Error Frame: {msg.__str__()}")
+        
         # write log file
-        if self.write is None or self.write_with_can_id is None:
+        if self.write is None or self.update_send_can_log is None or self.update_received_can_log is None:
             print("write function is not initialized")
             return
         
-        self.write(f"Received CAN Message can_id: {str(can_id)}, data: {data}")
-        self.write_with_can_id(f"Received CAN Message data: {data}", can_id)
-        print(f"Received CAN Message can_id: {can_id}, data: {data}")
+        self.write(f"Received: {msg.__str__()}")
+        self.update_received_can_log(msg)
+        print(f"Received: {msg.__str__()}")
 
 class R1MainController(MainController):
     def __init__(self, host_name, port):
@@ -68,7 +75,7 @@ class R1MainController(MainController):
         
         # init can lister
         lister = R1CANLister()
-        lister.init_write_fnc(self.log_system.write, self.log_system.write_with_can_id)
+        lister.init_write_fnc(self.log_system.write, self.log_system.update_received_can_log, self.log_system.update_send_can_log, self.log_system.update_error_log)
         lister.init_write_can_bus_func(self.write_can_bus)
         self.init_can_notifier(lister=lister)
         
@@ -93,11 +100,13 @@ class R1MainController(MainController):
                     self.parse_to_can_message(ctr_data)
                 except KeyError as e:
                     self.log_system.write(f"Invalid key is included in the data: {e}")
+                    self.log_system.update_error_log(f"Invalid key is included in the data: {e}")
                     print(f"Invalid key is included in the data: {e}")
                     continue
                 
         except KeyboardInterrupt as e:
             self.log_system.write(f"R1Controller main stopped")
+            self.log_system.update_error_log(f"R1Controller main stopped")
             print(f"R1Controller main stopped")
     
     def parse_to_can_message(self, data: ClientController):
@@ -149,7 +158,7 @@ class R1MainController(MainController):
         
     def test(self):
         while True:
-            # self.write_can_bus(CANList.ARM_STATE.value, bytearray([0]))
+            self.write_can_bus(CANList.ARM_STATE.value, bytearray([0]))
             # self.write_can_bus(0x001, bytearray([1]))
             time.sleep(1)
         # for i in range(100):
