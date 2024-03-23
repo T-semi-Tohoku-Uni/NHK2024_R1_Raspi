@@ -1,8 +1,10 @@
 #!/bin/bash
 
-cd /home/keigo/NHK2024/NHK2024_R1_Raspi
+cd /home/pi/NHK2024/NHK2024_R1_Raspi
 . ./env/bin/activate
 rm -rf logs
-python src/main.py
+mkdir logs
+chmod 777 logs
+nohup python -u src/main.py
 
 exit 0

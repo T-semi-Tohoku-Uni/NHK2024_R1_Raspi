@@ -158,15 +158,15 @@ class R1MainController(MainController):
         
     def test(self):
         while True:
-            self.write_can_bus(CANList.ARM_STATE.value, bytearray([0]))
+            self.write_can_bus(CANList.ARM1.value, bytearray([0]))
             # self.write_can_bus(0x001, bytearray([1]))
             time.sleep(1)
         # for i in range(100):
         #     self.write_can_bus(i, bytearray([i]))
     
 if __name__ == "__main__":
-    host_name = "raspberrypi.local"
+    host_name = "tsemiR1.local"
     port = 12345
     r2_main_controller = R1MainController(host_name=host_name, port=port)
     # r2_main_controller.main()
-    r2_main_controller.test()
+    r2_main_controller.main()
