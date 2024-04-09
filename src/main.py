@@ -1,21 +1,47 @@
-from NHK2024_Raspi_Library import MainController, TwoStateButton, TwoStateButtonHandler, ThreeStateButton, ThreeStateButtonHandler
+from NHK2024_Raspi_Library import MainController, TwoStateButton, TwoStateButtonHandler, ThreeStateButton, ThreeStateButtonHandler, OneStateButton, OneStateButtonHandler
 import json
 import sys
-from typing import Dict, Callable
+from typing import Dict, Callable, Optional
 from enum import Enum
 import can
 import time
+from area import SeedlingHandState, AreaState, SeedlingHandPosition, Area
+from can_list import CANList
+import multiprocessing
 
 class CANList(Enum):
+    # Seedling
+    SEEDLING_ARM_SET = 0x103
+    SEEDLING_ARM_OPEN = 0x151
+    SEEDLING_ARM_SEEDLING_GET = 0x152
+    SEEDLING_ARM_DOWM = 0x153
+    SEEDLING_HAND_POSITION = 0x108
+    SEEDLING_ARM_ELEVATOR = 0x104
+    SEEDLING_INSIDE_HAND_OPEN = 0x105
+    SEEDLING_OUTSIDE_HAND_OPEN = 0x106
+    
+    # Ball
+    BALL_ARM_EXPAND = 0x103 # アーム展開（地面につける）
+    BALL_BALL_HAND_OPEN = 0x102 # ボール回収用のアームを開く
+    BALL_SHOOT = 0x101
+    BALL_MOTOR_ON = 0x160
+    
     ARM_EXPANDER = 0x103
     HAND1 = 0x105
     HAND2 = 0X106
     ARM_STATE = 0x107
-    ARM_ELEVATOR = 0x104
     ARM1 = 0x108
     SHOOT = 0x101
     BALL_HAND = 0x102
     ROBOT_VEL = 0x10B
+    
+    # ラズパイ => マイコン
+    CHECK_INJECTION_MECHANISM = 0x300
+    CHECK_SEEDLING_MECHANISM = 0x301
+    
+    # マイコン => ラズパイ
+    RESPONSE_INJECTION_MECHANISM = 0x400
+    RESPONSE_SEEDLING_MECHANISM = 0x401
 
 class ClientController:
     def __init__(self, data: Dict):
@@ -27,11 +53,22 @@ class ClientController:
             self.btn_b = data["btn_b"]
             self.btn_x = data["btn_x"]
             self.btn_y = data["btn_y"]
-            self.btn_lb = data["btn_lb"]
+            # self.btn_lb = data["btn_lb"]
             self.btn_rb = data["btn_rb"]
-            self.start_btn = data["start_btn"]
+            self.seedling_hand_pos = SeedlingHandPosition(data["seedling_hand_pos"])
+            self.area_state = Area(data["area_state"])
+           # self.start_btn = data["start_btn"]
         except KeyError as e:
-            raise KeyError("Invalid key is included in the data: {e}")
+            raise KeyError(f"Invalid key is included in the data: {e}")
+
+class WheelDataFromClient:
+    def __init__(self, data: Dict):
+        try:
+            self.v_x = data["v_x"]
+            self.v_y = data["v_y"]
+            self.omega = data["omega"]
+        except KeyError as e:
+            raise KeyError(f"Invalid key is included in the data: {e}")
 
 class R1CANLister(can.Listener):
     def __init__(self):
@@ -70,8 +107,8 @@ class R1CANLister(can.Listener):
         print(f"Received: {msg.__str__()}")
 
 class R1MainController(MainController):
-    def __init__(self, host_name, port):
-        super().__init__(host_name=host_name, port=port)
+    def __init__(self, host_name, port, port_for_wheel_controle):
+        super().__init__(host_name=host_name, port=port, port_for_wheel_controle=port_for_wheel_controle)
         
         # init can lister
         lister = R1CANLister()
@@ -81,15 +118,37 @@ class R1MainController(MainController):
         
         # init button state
         self.btn_a_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
+        # self.btn_a_state = OneStateButtonHandler(state=OneStateButton.WAIT)
         self.btn_b_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
-        self.btn_x_state = ThreeStateButtonHandler(state=ThreeStateButton.WAIT_0)
+        self.btn_x_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
+        # self.btn_y_state = OneStateButtonHandler(state=OneStateButton.WAIT)
         self.btn_y_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
-        self.btn_lb_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
-        self.btn_rb_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
+        # self.btn_lb_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
+        
+        self.btn_rb_state = OneStateButtonHandler()
+        # self.btn_rb_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
+        
+        # start manageWheelControl at sub thread
+        self.process_for_wheel = multiprocessing.Process(target=self.manageWheelControl)
+        self.process_for_wheel.start()
+        self.log_system.write("Start manageWheelControl")
+        print("Start manageWheelControl")
+        
+        # init area state
+        self.area_state = AreaState(
+            initialize_seedling_state=self.initialize_seedling_state, 
+            initialize_ball_state=self.initialize_ball_state
+        )
+        
+        # init hand state
+        self.seedling_hand_state = SeedlingHandState()
+        
+        print("Initialize Controller")
         
     def main(self):
         self.log_system.write(f"Start R1Controller main")
         print(f"Start R1Controller main")
+
         
         try:
             while True:
@@ -105,68 +164,193 @@ class R1MainController(MainController):
                     continue
                 
         except KeyboardInterrupt as e:
+            self.process_for_wheel.terminate()
+            self.process_for_wheel.join()
+            self.log_system.write("manageWheelControl stopped")
+            self.log_system.update_error_log("manageWheelControl stopped")
+            print("manageWheelControl stopped")
             self.log_system.write(f"R1Controller main stopped")
             self.log_system.update_error_log(f"R1Controller main stopped")
             print(f"R1Controller main stopped")
     
-    def parse_to_can_message(self, data: ClientController):
-        # ボタンA関連(HAND1)
-        self.btn_a_state.handle_button(
-            is_pressed=data.btn_a,
-            action_send_0=lambda: self.write_can_bus(CANList.HAND1.value, bytearray([0])),
-            action_send_1=lambda: self.write_can_bus(CANList.HAND1.value, bytearray([1]))
-        )
-        
-        # ボタンB関連(HAND2)
-        self.btn_b_state.handle_button(
-            is_pressed=data.btn_b,
-            action_send_0=lambda: self.write_can_bus(CANList.HAND2.value, bytearray([0])),
-            action_send_1=lambda: self.write_can_bus(CANList.HAND2.value, bytearray([1]))
-        )
-        
-        # ボタンX関連(ARMの位置制御)
-        self.btn_x_state.handle_button(
-            is_pressed=data.btn_x,
-            action_send_0=lambda: self.write_can_bus(CANList.ARM1.value, bytearray([0])),
-            action_send_1=lambda: self.write_can_bus(CANList.ARM1.value, bytearray([1])),
-            action_send_2=lambda: self.write_can_bus(CANList.ARM1.value, bytearray([2]))
-        )
-        
-        # ボタンY関連(ARM_EXPANDER)
-        self.btn_y_state.handle_button(
-            is_pressed=data.btn_y,
-            action_send_0=lambda: self.write_can_bus(CANList.ARM_EXPANDER.value, bytearray([0])),
-            action_send_1=lambda: self.write_can_bus(CANList.ARM_EXPANDER.value, bytearray([1]))
-        )
-        
-        # ボールの装填
-        self.btn_lb_state.handle_button(
-            is_pressed=data.btn_lb,
-            action_send_0=lambda: self.write_can_bus(CANList.BALL_HAND.value, bytearray([0])),
-            action_send_1=lambda: self.write_can_bus(CANList.ARM_STATE.value, bytearray([]))
-        )
-        
-        # 発射
-        self.btn_rb_state.handle_button(
-            is_pressed=data.btn_rb,
-            action_send_0=lambda: self.write_can_bus(CANList.SHOOT.value, bytearray([0])),
-            action_send_1=lambda: self.write_can_bus(CANList.SHOOT.value, bytearray([1]))
-        )
-        
-        # 速度制御
-        self.write_can_bus(CANList.ROBOT_VEL.value, bytearray([data.v_x, data.v_y, data.omega]))
-        
-    def test(self):
+    # ロボットの足回りの制御をする
+    # mainスレッドとは別のスレッドで非同期に実行する
+    def manageWheelControl(self):
+        self.log_system.write("Start Wheel Control")
+        print("Start Wheel Control")
+
         while True:
-            self.write_can_bus(CANList.ARM1.value, bytearray([0]))
-            # self.write_can_bus(0x001, bytearray([1]))
-            time.sleep(1)
-        # for i in range(100):
-        #     self.write_can_bus(i, bytearray([i]))
+            raw_wheel_data = json.loads(self.read_udp_for_wheel_controle())
+            try:
+                wheel_data = WheelDataFromClient(raw_wheel_data)
+                self.write_can_bus(CANList.ROBOT_VEL.value, bytearray([wheel_data.v_x, wheel_data.v_y, wheel_data.omega]))
+            except KeyError as e:
+                self.log_system.write(f"Invalid key is included in the data: {e}")
+                self.log_system.update_error_log(f"Invalid key is included in the data: {e}")
+                print(f"Invalid key is included in the data: {e}")
+                continue
+            except:
+                self.log_system.write("Unknown Error")
+                self.log_system.update_error_log("Unknown Error")
+                print("Unknown Error")
+                continue
+
+    def parse_to_can_message(self, data: ClientController):
+        
+        # area_stateの状態変更はここで
+        self.area_state.set_state(data.area_state)
+        
+        if self.area_state.is_seedling():
+            # 苗ハンドの位置設定
+            self.seedling_hand_state.update_state(data.seedling_hand_pos, self.write_can_bus)
+            
+            (seedling_hand_action_send_0, seedling_hand_action_send_1) = \
+                self.seedling_hand_state.set_btn_y_handler(self.write_can_bus)
+                
+            # 苗ハンドの開閉（ボタンY）
+            self.btn_y_state.handle_button(
+                is_pressed=data.btn_y,
+                action_send_0=seedling_hand_action_send_0,
+                action_send_1=seedling_hand_action_send_1
+            )
+            
+            # 苗アームの上下
+            self.btn_a_state.handle_button(
+                is_pressed=data.btn_a,
+                action_send_0=lambda: self.write_can_bus(CANList.SEEDLING_ARM_ELEVATOR.value, bytearray([0])),
+                action_send_1=lambda: self.write_can_bus(CANList.SEEDLING_ARM_ELEVATOR.value, bytearray([1]))
+            )
+        
+        if self.area_state.is_ball():
+            # ボール回収用のアームの開閉（ボタンB）
+            self.btn_b_state.handle_button(
+                is_pressed=data.btn_b,
+                action_send_0=lambda: self.write_can_bus(CANList.BALL_BALL_HAND_OPEN.value, bytearray([0])),
+                action_send_1=lambda: self.write_can_bus(CANList.BALL_BALL_HAND_OPEN.value, bytearray([1]))
+            )
+            
+            # ボール回収用のアームを地面につける（ボタンX）
+            self.btn_x_state.handle_button(
+                is_pressed=data.btn_x,
+                action_send_0=lambda: self.write_can_bus(CANList.BALL_ARM_EXPAND.value, bytearray([0])),
+                action_send_1=lambda: self.write_can_bus(CANList.BALL_ARM_EXPAND.value, bytearray([1]))
+            )
+            
+            # ボールの発射 (ボタンrb)
+            self.btn_rb_state.handle_button(
+                is_pressed=data.btn_rb,
+                action_send=self.shoot_ball
+            )
+    
+    def initialize_seedling_state(self):
+        
+        # TODO: 足回り以外の処理を禁止
+        
+        # 射出部分の掴むところを格納
+        self.write_can_bus(CANList.ARM_EXPANDER.value, bytearray([0]))
+        self.write_can_bus(CANList.BALL_HAND.value, bytearray([0]))
+        
+        # 安全のため1秒停止, TODO: どれぐらいの秒数が必要なのか確認
+        time.sleep(1)
+        
+        # 射出部分を上に上げる
+        self.write_can_bus(CANList.SHOOT.value, bytearray([1]))
+        
+        # 完了メッセージが届くまで待つ
+        # self.write_can_bus(CANList.CHECK_INJECTION_MECHANISM.value, bytearray([]))
+        # if self.wait_can_message(CANList.RESPONSE_INJECTION_MECHANISM.value, timeout=5) is None:
+        #     self.log_system.update_error_log("Error: Cannot recive RESPONSE_INJECTION_MECHANISM")
+        #     self.log_system.write("Error: Cannot recive RESPONSE_INJECTION_MECHANISM")
+        #     print("Error: Cannot recive RESPONSE_INJECTION_MECHANISM")
+        #     return
+        
+        time.sleep(1)
+        
+        # 完了後に次の動作を行う
+        # TODO: もしかしたら逆かもしれないので、チェックする
+        # アームを下ろす
+        self.write_can_bus(CANList.SEEDLING_ARM_ELEVATOR.value, bytearray([0]))
+        # ハンドの腕を下ろす
+        self.write_can_bus(CANList.SEEDLING_ARM_SET.value, bytearray([1]))
+        # ハンドを開く
+        self.write_can_bus(CANList.SEEDLING_INSIDE_HAND_OPEN.value, bytearray([1]))
+        self.write_can_bus(CANList.SEEDLING_OUTSIDE_HAND_OPEN.value, bytearray([1]))
+        
+        # TODO: 足回り以外の処理を再開可能
+
+        return
+    
+    # TODO: test
+    def initialize_ball_state(self):
+        
+        self.write_can_bus(CANList.SEEDLING_ARM_ELEVATOR.value, bytearray([1]))
+        self.write_can_bus(CANList.SEEDLING_ARM_SET.value, bytearray([0]))
+        self.write_can_bus(CANList.SEEDLING_ARM_OPEN.value, bytearray([0]))
+        
+        # self.write_can_bus(CANList.CHECK_SEEDLING_MECHANISM.value, bytearray([]))
+        # if self.wait_can_message(CANList.RESPONSE_SEEDLING_MECHANISM.value, timeout=5) is None:
+        #     self.log_system.update_error_log("Error: Cannot recive RESPONSE_SEEDLING_MECHANISM")
+        #     self.log_system.write("Error: Cannot recive RESPONSE_SEEDLING_MECHANISM")
+        #     print("Error: Cannot recive RESPONSE_SEEDLING_MECHANISM")
+        #     return
+        
+        time.sleep(1)
+        
+        self.write_can_bus(CANList.SHOOT.value, bytearray([0]))
+        
+        return
+    
+    def shoot_ball(self):
+        # モータ回す
+        self.write_can_bus(CANList.BALL_MOTOR_ON.value, bytearray([1]))
+        # 1秒停止
+        time.sleep(1)
+        # ボール発射
+        # マイコン側で、ボールのアームを格納するようにする
+        self.write_can_bus(CANList.BALL_SHOOT.value, bytearray([1]))
+        # 一秒停止
+        time.sleep(1)
+        # 射出機構を元に戻す
+        self.write_can_bus(CANList.BALL_MOTOR_ON.value, bytearray([0]))
+        self.write_can_bus(CANList.BALL_SHOOT.value, bytearray([0]))
+    
+    def wait_can_message(self, can_id: int, timeout=0.5) -> Optional[can.Message]:
+        filters = [{
+            "can_id": can_id,
+            "can_mask": 0x7FF
+        }]
+        
+        with can.interface.Bus(channel='can0', bustype='socketcan', bitrate=1000000, fd=True, data_bitrate=2000000) as bus:
+            bus.set_filters(filters=filters)
+            msg = bus.recv(timeout=timeout)
+            
+        return msg
+    
+    def test(self):
+        self.btn_a_state.handle_button(
+            is_pressed=1,
+            action_send = self.get_seedling_with_arm
+        )
     
 if __name__ == "__main__":
     host_name = "tsemiR1.local"
     port = 12345
-    r2_main_controller = R1MainController(host_name=host_name, port=port)
-    # r2_main_controller.main()
+    port_for_wheel_controle = 12346
+    r2_main_controller = R1MainController(host_name=host_name, port=port, port_for_wheel_controle=port_for_wheel_controle)
     r2_main_controller.main()
+    # r2_main_controller.initialize_seedling_state()
+    # dict = {
+    #     "v_x" : 100,
+    #     "v_y" : 100,
+    #     "omega": 100,
+    #     "btn_a" : 1,
+    #     "btn_b" : 0,
+    #     "btn_y" : 1,
+    #     "btn_x" : 1,
+    #     "btn_rb" : 1,
+    #     "seedling_hand_pos": 0,
+    #     "area_state": 1
+    # }
+    # r2_main_controller.parse_to_can_message(ClientController(dict))
+    # r2_main_controller.parse_to_can_message(dict)
+    
