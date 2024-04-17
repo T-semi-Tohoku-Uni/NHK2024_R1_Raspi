@@ -17,7 +17,6 @@ class AreaState:
         self.initialize_seedling_state = initialize_seedling_state
         self.initialize_ball_state = initialize_ball_state
         self.set_state(state=state)
-    
     def set_state(self, state: Area):
         # state not change, pass
         if self.state == state:
@@ -50,8 +49,8 @@ class AreaState:
     
 class SeedlingHandPosition(Enum):
     PICKUP = 0
-    PUTINSIDE = 1
-    PUTOUTSIDE = 2
+    PUTOUTSIDE = 1
+    PUTINSIDE = 2
     
 class SeedlingHandState:
     def __init__(self, state = SeedlingHandPosition.PICKUP):
@@ -68,11 +67,11 @@ class SeedlingHandState:
             return
         
         if new_pos == SeedlingHandPosition.PICKUP:
-            write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([0]))
+            write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PICKUP.value]))
         elif new_pos == SeedlingHandPosition.PUTINSIDE:
-            write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([1]))
+            write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PUTINSIDE.value]))
         elif new_pos == SeedlingHandPosition.PUTOUTSIDE:
-            write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([2]))
+            write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PUTOUTSIDE.value]))
             
         self.state = new_pos
         
