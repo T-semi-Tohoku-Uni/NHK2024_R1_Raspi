@@ -2,7 +2,7 @@ from enum import Enum
 
 class CANList(Enum):
     # Seedling
-    SEEDLING_ARM_SET = 0x150
+    SEEDLING_ARM_RESET = 0x150
     SEEDLING_ARM_OPEN = 0x151
     SEEDLING_ARM_SEEDLING_GET = 0x152
     SEEDLING_ARM_DOWM = 0x153
