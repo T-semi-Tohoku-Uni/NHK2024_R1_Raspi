@@ -126,6 +126,9 @@ class R1MainController(MainController):
         self.btn_rb_state = OneStateButtonHandler()
         # self.btn_rb_state = TwoStateButtonHandler(state=TwoStateButton.WAIT_1)
         
+        # init hand state
+        self.seedling_hand_state = SeedlingHandState()
+        
         # start manageWheelControl at sub thread
         self.process_for_wheel = multiprocessing.Process(target=self.manageWheelControl)
         self.process_for_wheel.start()
@@ -140,9 +143,6 @@ class R1MainController(MainController):
             initialize_seedling_state=self.initialize_seedling_state, 
             initialize_ball_state=self.initialize_ball_state
         )
-        
-        # init hand state
-        self.seedling_hand_state = SeedlingHandState()
         
         print("Initialize Controller")
         
@@ -255,11 +255,12 @@ class R1MainController(MainController):
                 is_pressed=data.btn_rb,
                 action_send=self.shoot_ball
             )
+            
+        # mainのUDPバッファを空にする
+        self.clear_udp_socket(self.sock)
     
     def initialize_seedling_state(self):
-        
-        # TODO: 足回り以外の処理を禁止
-        
+        print("initialize seddling state")
         # 射出部分の掴むところを格納
         self.write_can_bus(CANList.BALL_ARM_UNEXPAND.value, bytearray([1]))
         self.write_can_bus(CANList.BALL_HAND.value, bytearray([0]))
@@ -284,14 +285,19 @@ class R1MainController(MainController):
         # TODO: もしかしたら逆かもしれないので、チェックする
         # アームを下ろす
         self.write_can_bus(CANList.SEEDLING_ARM_ELEVATOR.value, bytearray([1]))
+        self.btn_a_state.transision_next_state(1)
         # ハンドの腕を下ろす
         self.write_can_bus(CANList.SEEDLING_ARM_SET.value, bytearray([1]))
         # ハンドを開く
         self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PICKUP.value]))
         self.write_can_bus(CANList.SEEDLING_INSIDE_HAND_OPEN.value, bytearray([1]))
         self.write_can_bus(CANList.SEEDLING_OUTSIDE_HAND_OPEN.value, bytearray([1]))
+        self.seedling_hand_state.reset_state(SeedlingHandPosition.PICKUP.value)
+        self.btn_a_state.transision_next_state(1)
+        self.btn_y_state.transision_next_state(1)
         
-        # TODO: 足回り以外の処理を再開可能
+        # mainのUDPバッファを空にする
+        self.clear_udp_socket(self.sock)
 
         return
     
@@ -303,6 +309,11 @@ class R1MainController(MainController):
         self.write_can_bus(CANList.SEEDLING_ARM_SET.value, bytearray([0]))
         self.write_can_bus(CANList.SEEDLING_INSIDE_HAND_OPEN.value, bytearray([0]))
         self.write_can_bus(CANList.SEEDLING_OUTSIDE_HAND_OPEN.value, bytearray([0]))
+        self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PUTINSIDE.value]))
+        
+        self.btn_a_state.transision_next_state(0)
+        self.btn_y_state.transision_next_state(0)
+        self.seedling_hand_state.reset_state(SeedlingHandPosition.PUTINSIDE.value)
         
         # self.write_can_bus(CANList.CHECK_SEEDLING_MECHANISM.value, bytearray([]))
         # if self.wait_can_message(CANList.RESPONSE_SEEDLING_MECHANISM.value, timeout=5) is None:
@@ -314,6 +325,13 @@ class R1MainController(MainController):
         time.sleep(2)
         
         self.write_can_bus(CANList.SHOOT.value, bytearray([1]))
+        
+        # ボタンの状態を更新する
+        self.btn_x_state.transision_next_state(1)
+        self.btn_b_state.transision_next_state(0)
+        
+        # mainのUDPバッファを空にする
+        self.clear_udp_socket(self.sock)
         
         return
     
@@ -330,6 +348,13 @@ class R1MainController(MainController):
         # 射出機構を元に戻す
         self.write_can_bus(CANList.BALL_MOTOR_ON.value, bytearray([0]))
         self.write_can_bus(CANList.BALL_SHOOT.value, bytearray([1]))
+        
+        # ボタンの状態を更新する
+        self.btn_x_state.transision_next_state(1)
+        self.btn_b_state.transision_next_state(0)
+        
+        # mainのUDPバッファを空にする
+        self.clear_udp_socket(self.sock)
     
     def wait_can_message(self, can_id: int, timeout=0.5) -> Optional[can.Message]:
         filters = [{

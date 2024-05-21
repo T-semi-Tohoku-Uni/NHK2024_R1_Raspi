@@ -53,7 +53,7 @@ class SeedlingHandPosition(Enum):
     PUTINSIDE = 2
     
 class SeedlingHandState:
-    def __init__(self, state = SeedlingHandPosition.PICKUP):
+    def __init__(self, state = None):
         self.state = state
     
     def update_state(self, new_state: int, write_can_bus: Callable[[int, bytearray], None]):
@@ -62,10 +62,12 @@ class SeedlingHandState:
         except ValueError as e:
             print(f"Error at SeedlingHandState.update_state {e}")
             return
-        
+
+        print(f"self.state = {self.state} and new_pos = {new_pos}")
+
         if self.state == new_pos:
             return
-        
+
         if new_pos == SeedlingHandPosition.PICKUP:
             write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PICKUP.value]))
         elif new_pos == SeedlingHandPosition.PUTINSIDE:
@@ -104,3 +106,6 @@ class SeedlingHandState:
                 write_can_bus(CANList.SEEDLING_OUTSIDE_HAND_OPEN.value, bytearray([1]))
             
             return (action_send_0, action_send_1)
+
+    def reset_state(self, new_state: int):
+        self.state = SeedlingHandPosition(new_state)
