@@ -135,15 +135,17 @@ class R1MainController(MainController):
         self.log_system.write("Start manageWheelControl")
         print("Start manageWheelControl")
        
+        # ラズパイとの生存確認用メッセージ
         self.process_for_is_active = multiprocessing.Process(target=self.sendIsActiveMessage)
         self.process_for_is_active.start()
         
         # init area state
         self.area_state = AreaState(
             initialize_seedling_state=self.initialize_seedling_state, 
-            initialize_ball_state=self.initialize_ball_state
+            initialize_ball_state=self.initialize_ball_state,
+            initialize_start_state=self.initialize_start_state
         )
-        
+
         print("Initialize Controller")
         
     def main(self):
@@ -214,6 +216,8 @@ class R1MainController(MainController):
         # area_stateの状態変更はここで
         self.area_state.set_state(data.area_state)
         
+        print(self.area_state.is_start())
+        
         if self.area_state.is_seedling():
             # 苗ハンドの位置設定
             self.seedling_hand_state.update_state(data.seedling_hand_pos, self.write_can_bus)
@@ -258,6 +262,34 @@ class R1MainController(MainController):
             
         # mainのUDPバッファを空にする
         self.clear_udp_socket(self.sock)
+    
+    def initialize_start_state(self):
+        print("initialize start state")
+        
+        # 射出部分の掴むところを格納
+        self.write_can_bus(CANList.BALL_ARM_UNEXPAND.value, bytearray([1]))
+        self.write_can_bus(CANList.BALL_HAND.value, bytearray([0]))
+        
+        time.sleep(0.5)
+        
+        # 苗アームをup
+        self.write_can_bus(CANList.SEEDLING_ARM_ELEVATOR.value, bytearray([0]))
+        self.btn_a_state.transision_next_state(1)
+        
+        time.sleep(1)
+        
+        # 安全のため1秒停止, TODO: どれぐらいの秒数が必要なのか確認
+        
+        # 射出部分をdown
+        self.write_can_bus(CANList.SHOOT.value, bytearray([1]))
+        
+        # アームの制御を止める
+        self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.RESET.value]))
+        
+        # mainのUDPバッファを空にする
+        self.clear_udp_socket(self.sock)
+        
+        pass
     
     def initialize_seedling_state(self):
         print("initialize seddling state")
@@ -305,11 +337,12 @@ class R1MainController(MainController):
     def initialize_ball_state(self):
         
         print("Initialize ball state")
+        self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PUTINSIDE.value]))
+        time.sleep(1)
         self.write_can_bus(CANList.SEEDLING_ARM_ELEVATOR.value, bytearray([0]))
         self.write_can_bus(CANList.SEEDLING_ARM_SET.value, bytearray([0]))
         self.write_can_bus(CANList.SEEDLING_INSIDE_HAND_OPEN.value, bytearray([0]))
         self.write_can_bus(CANList.SEEDLING_OUTSIDE_HAND_OPEN.value, bytearray([0]))
-        self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PUTINSIDE.value]))
         
         self.btn_a_state.transision_next_state(0)
         self.btn_y_state.transision_next_state(0)
@@ -373,12 +406,15 @@ class R1MainController(MainController):
         #     is_pressed=1,
         #     action_send = self.get_seedling_with_arm
         # )
-        while True:
-            # self.write_can_bus(CANList.ROBOT_VEL.value, bytearray([160, 127, 127]))
-            self.write_can_bus(CANList.ARM_EXPANDER.value, bytearray([0]))
-            time.sleep(5)
-            self.write_can_bus(CANList.ARM_EXPANDER.value, bytearray([1]))
-            time.sleep(5)
+        # self.write_can_bus(CANList.ROBOT_VEL.value, bytearray([160, 127, 127]))
+        # self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.RESET.value]))
+        self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.RESET.value]))
+        time.sleep(1)
+        self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PUTOUTSIDE.value]))
+        time.sleep(2)
+        self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.RESET.value]))
+        time.sleep(1)
+        self.write_can_bus(CANList.SEEDLING_HAND_POSITION.value, bytearray([SeedlingHandPosition.PUTINSIDE.value]))
     
 if __name__ == "__main__":
     host_name = "tsemiR1.local"

@@ -1,0 +1,13 @@
+[Unit]
+Description = Run main program
+After = multi-user.target
+
+[Service]
+WorkingDirectory=/home/computers/NHK2024/NHK2024_R1_Raspi
+ExecStart=/usr/bin/tmux new-session -d -s nhk '/home/computers/NHK2024/NHK2024_R1_Raspi/start_tmux_session.sh'
+Type=oneshot
+RemainAfterExit=yes
+User=computers
+
+[Install]
+WantedBy=multi-user.target
