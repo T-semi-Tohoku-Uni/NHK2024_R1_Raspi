@@ -8,6 +8,10 @@ import time
 from area import SeedlingHandState, AreaState, SeedlingHandPosition, Area
 from can_list import CANList
 import multiprocessing
+import threading
+from multiprocessing import Value, Lock
+import ctypes
+from typing import Tuple
 
 class CANList(Enum):
     # Seedling
@@ -58,6 +62,27 @@ class ClientController:
            # self.start_btn = data["start_btn"]
         except KeyError as e:
             raise KeyError(f"Invalid key is included in the data: {e}")
+
+class WheelDataSharedMemory:
+    def __init__(self):
+        self.__vx_buf = Value(ctypes.c_int, 127)
+        self.__vy_buf = Value(ctypes.c_int, 127)
+        self.__omega_buf = Value(ctypes.c_int, 127)
+
+        self.lock = Lock()
+
+    def read(self) -> Tuple[int, int, int]:
+        with self.lock:
+            vx = self.__vx_buf
+            vy = self.__vy_buf
+            omega = self.__omega_buf
+            return (vx.value, vy.value, omega.value)
+    
+    def write(self, vx, vy, omega):
+        with self.lock:
+            self.__vx_buf.value = vx
+            self.__vy_buf.value = vy
+            self.__omega_buf.value = omega
 
 class WheelDataFromClient:
     def __init__(self, data: Dict):
@@ -128,6 +153,9 @@ class R1MainController(MainController):
         
         # init hand state
         self.seedling_hand_state = SeedlingHandState()
+
+        # shared memory
+        self.shared_wheel_data = WheelDataSharedMemory()
         
         # start manageWheelControl at sub thread
         self.process_for_wheel = multiprocessing.Process(target=self.manageWheelControl)
@@ -145,6 +173,10 @@ class R1MainController(MainController):
             initialize_ball_state=self.initialize_ball_state,
             initialize_start_state=self.initialize_start_state
         )
+
+        # delete wheel data
+        self.process_for_wheel_priod = multiprocessing.Process(target=self.sendWheelDataRegularly)
+        self.process_for_wheel_priod.start()
 
         print("Initialize Controller")
         
@@ -177,6 +209,10 @@ class R1MainController(MainController):
             self.log_system.write("isCheckActived stop")
             self.log_system.update_error_log("isCheckActived stop")
             print("isCheckActived stop")
+
+            self.process_for_wheel_priod.terminate()
+            self.process_for_wheel_priod.join()
+
             self.log_system.write(f"R1Controller main stopped")
             self.log_system.update_error_log(f"R1Controller main stopped")
             print(f"R1Controller main stopped")
@@ -192,17 +228,25 @@ class R1MainController(MainController):
             try:
                 wheel_data = WheelDataFromClient(raw_wheel_data)
                 self.write_can_bus(CANList.ROBOT_VEL.value, bytearray([wheel_data.v_x, wheel_data.v_y, wheel_data.omega]))
+                self.shared_wheel_data.write(wheel_data.v_x, wheel_data.v_y, wheel_data.omega)
             except KeyError as e:
                 self.log_system.write(f"Invalid key is included in the data: {e}")
                 self.log_system.update_error_log(f"Invalid key is included in the data: {e}")
                 print(f"Invalid key is included in the data: {e}")
                 continue
-            except:
+            except Exception as e:
+                print(e)
                 self.log_system.write("Unknown Error")
                 self.log_system.update_error_log("Unknown Error")
                 print("Unknown Error")
                 continue
     
+    def sendWheelDataRegularly(self):
+        while True:
+            (vx, vy, omega) = self.shared_wheel_data.read()
+            self.write_can_bus(CANList.ROBOT_VEL.value, bytearray([vx, vy, omega]))
+            time.sleep(0.05)
+
     def sendIsActiveMessage(self):
         self.log_system.write("Start sendIsActiveMessage")
         print("Start sendIsActiveMessage")
@@ -288,8 +332,6 @@ class R1MainController(MainController):
         
         # mainのUDPバッファを空にする
         self.clear_udp_socket(self.sock)
-        
-        pass
     
     def initialize_seedling_state(self):
         print("initialize seddling state")
@@ -311,7 +353,7 @@ class R1MainController(MainController):
         #     print("Error: Cannot recive RESPONSE_INJECTION_MECHANISM")
         #     return
         
-        time.sleep(2)
+        time.sleep(1.5)
         
         # 完了後に次の動作を行う
         # TODO: もしかしたら逆かもしれないので、チェックする

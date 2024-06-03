@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# delete logs
+rm -r /home/computers/NHK2024/NHK2024_R1_Raspi/logs
+
 tmux new-session -d -s nhk
 
 tmux split-window -h
